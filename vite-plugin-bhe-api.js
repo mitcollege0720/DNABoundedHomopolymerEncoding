@@ -1,13 +1,52 @@
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { existsSync, chmodSync, statSync } from 'node:fs'
 
 const execFileAsync = promisify(execFile)
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
 const BHE_BRIDGE = join(__dirname, 'bhe_bridge')
 const BHE_RATES = join(__dirname, 'bhe_rates')
 const BHE_BENCHMARK = join(__dirname, 'bounded_homopolymer')
+
+function isExecutable(filePath) {
+  try {
+    const stat = statSync(filePath)
+    return (stat.mode & 0o111) !== 0
+  } catch {
+    return false
+  }
+}
+
+function ensureBinary(binaryPath, sourceFile, extraFlags = '') {
+  if (existsSync(binaryPath) && isExecutable(binaryPath)) {
+    return
+  }
+  if (!existsSync(binaryPath)) {
+    chmodSync(binaryPath, 0o755)
+    if (isExecutable(binaryPath)) return
+  }
+  const cmd = `g++ -O3 ${sourceFile} -lgmpxx -lgmp -o ${binaryPath}`
+  console.log(`[bhe-api] Compiling ${binaryPath}...`)
+  execFileSync('g++', ['-O3', sourceFile, '-lgmpxx', '-lgmp', '-o', binaryPath], {
+    stdio: 'pipe',
+    cwd: __dirname,
+  })
+  chmodSync(binaryPath, 0o755)
+  console.log(`[bhe-api] Compiled ${binaryPath}`)
+}
+
+function ensureAllBinaries() {
+  try {
+    ensureBinary(BHE_BRIDGE, 'bhe_bridge.cpp')
+    ensureBinary(BHE_RATES, 'BHE_rates.cpp')
+    ensureBinary(BHE_BENCHMARK, 'BoundedHomopolymerEncoding.cpp')
+  } catch (err) {
+    console.error('[bhe-api] Failed to compile binaries:', err.message)
+  }
+}
 
 const BASE_MAP = { '0': 'A', '1': 'C', '2': 'G', '3': 'T' }
 
@@ -149,6 +188,7 @@ export function createBheApiPlugin() {
   return {
     name: 'bhe-api',
     configureServer(server) {
+      ensureAllBinaries()
       server.middlewares.use(async (req, res, next) => {
         if (!req.url || !req.url.startsWith('/api')) {
           next()
@@ -162,6 +202,7 @@ export function createBheApiPlugin() {
       })
     },
     configurePreviewServer(server) {
+      ensureAllBinaries()
       server.middlewares.use(async (req, res, next) => {
         if (!req.url || !req.url.startsWith('/api')) {
           next()
